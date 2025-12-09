@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Form View Inheritance -->
+    <record id="view_picking_form_inherit_3pl" model="ir.ui.view">
+        <field name="name">stock.picking.form.inherit.3pl</field>
+        <field name="model">stock.picking</field>
+        <field name="inherit_id" ref="stock.view_picking_form"/>
+        <field name="arch" type="xml">
+            <!-- Control statusbar visibility order - include waiting_3pl between assigned and done -->
+            <xpath expr="//field[@name='state']" position="attributes">
+                <attribute name="statusbar_visible">draft,confirmed,assigned,waiting_3pl,done</attribute>
+            </xpath>
+
+            <!-- Add picking_type_code so it's available for domains/invisible attributes -->
+            <xpath expr="//field[@name='state']" position="after">
+                <field name="picking_type_code" invisible="1"/>
+            </xpath>
+
+            <!-- Add custom 3PL buttons -->
+            <xpath expr="//header" position="inside">
+                <!-- Send to 3PL: available when picking is eligible and Ready (assigned) -->
+                <button name="action_send_to_3pl" string="Send to 3PL" type="object" class="oe_highlight"
+                        invisible="not x_3pl_eligible or state != 'assigned' or x_3pl_status not in ('draft', 'error')"/>
+                <!-- Validar 3PL: available when waiting for 3PL (validates without waiting for webhook) -->
+                <!-- Distinct label to differentiate from native Validar button -->
+                <button name="action_force_validate" string="Validar (Forzar)" type="object" 
+                        class="oe_highlight"
+                        invisible="state != 'waiting_3pl'"
+                        confirm="Això validarà l'entrega sense esperar la confirmació del 3PL. Estàs segur?"/>
+                <!-- Track shipment: available when tracking URL exists -->
+                <button name="action_open_3pl_tracking" string="Track Shipment" type="object" 
+                        class="btn-info"
+                        invisible="not x_3pl_tracking_url"/>
+            </xpath>
+            
+            <!-- Add fields for button visibility -->
+            <xpath expr="//field[@name='picking_type_code']" position="after">
+                <field name="x_3pl_tracking_url" invisible="1"/>
+                <field name="x_3pl_status" invisible="1"/>
+                <field name="x_3pl_eligible" invisible="1"/>
+            </xpath>
+            
+            <xpath expr="//notebook" position="inside">
+                <page string="3PL Logistics" name="3pl_logistics" invisible="not x_3pl_eligible">
+                    <group>
+                        <group string="3PL Information">
+                            <field name="x_3pl_order_id"/>
+                            <field name="x_3pl_status"/>
+                        </group>
+                        <group string="Tracking">
+                            <field name="x_3pl_tracking_ref"/>
+                            <field name="x_3pl_tracking_url" widget="url"/>
+                        </group>
+                    </group>
+                </page>
+            </xpath>
+        </field>
+    </record>
+
+    <!-- Tree View Inheritance -->
+    <record id="vpicktree_inherit_3pl" model="ir.ui.view">
+        <field name="name">stock.picking.tree.inherit.3pl</field>
+        <field name="model">stock.picking</field>
+        <field name="inherit_id" ref="stock.vpicktree"/>
+        <field name="arch" type="xml">
+            <field name="state" position="after">
+                <field name="x_3pl_status" optional="show" widget="badge" 
+                       decoration-muted="x_3pl_status == 'draft'"
+                       decoration-info="x_3pl_status == 'sent'"
+                       decoration-success="x_3pl_status == 'shipped'"
+                       decoration-danger="x_3pl_status == 'error'"/>
+            </field>
+        </field>
+    </record>
+</odoo>
