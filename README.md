@@ -17,7 +17,7 @@ Una vez instalado el módulo, debe configurar las credenciales de conexión con 
 
 ### Parámetros e-Transport
 *   **ShipmentType (eCommerce):** Código para pedidos web (por defecto: `E` = Entrega).
-*   **ShipmentType (Internal):** Código para pedidos internos/manuales (por defecto: `M` = Movimiento).
+*   **ShipmentType (Internal):** Código para pedidos internos/manuales (por defecto: `R` = Recogida).
 *   **ServiceType:** Código de servicio (ej: `ND_3H` para ventana de entrega de 3 horas).
 *   **Default Temperature:** Temperatura por defecto para mercancías (`AM` = Ambiente, `FR` = Frío, `CO` = Congelado).
 
