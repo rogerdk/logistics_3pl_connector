@@ -1,9 +1,89 @@
 import requests
 import logging
+import os
+import json
+from datetime import datetime
 from odoo import models, fields, api, _
 from odoo.exceptions import UserError
 
 _logger = logging.getLogger(__name__)
+
+# Debug log file paths (try /var/log/odoo first, fallback to /tmp)
+DEBUG_LOG_PATHS = [
+    '/var/log/odoo/3pl_debug.log',
+    '/tmp/3pl_debug.log',
+]
+
+
+def _get_debug_log_path():
+    """Get writable debug log path."""
+    for path in DEBUG_LOG_PATHS:
+        log_dir = os.path.dirname(path)
+        if os.path.exists(log_dir) and os.access(log_dir, os.W_OK):
+            return path
+    # Fallback to /tmp
+    return '/tmp/3pl_debug.log'
+
+
+def _write_debug_log(method, url, headers, payload, response_status, response_body, picking_name=''):
+    """
+    Write API request/response to debug log file.
+    
+    Args:
+        method: HTTP method (GET, POST, etc.)
+        url: Full URL
+        headers: Request headers (API key will be masked)
+        payload: Request body (dict or None)
+        response_status: HTTP status code
+        response_body: Response body (string or dict)
+        picking_name: Optional picking reference for context
+    """
+    log_path = _get_debug_log_path()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+    
+    # Mask API key in headers for security
+    safe_headers = {}
+    for k, v in (headers or {}).items():
+        if k.lower() in ('x-api-key', 'authorization', 'api-key'):
+            safe_headers[k] = v[:8] + '...' + v[-4:] if len(v) > 12 else '***'
+        else:
+            safe_headers[k] = v
+    
+    # Format response body
+    if isinstance(response_body, dict):
+        response_str = json.dumps(response_body, indent=2, ensure_ascii=False, default=str)
+    else:
+        response_str = str(response_body)
+    
+    # Format payload
+    if payload:
+        payload_str = json.dumps(payload, indent=2, ensure_ascii=False, default=str)
+    else:
+        payload_str = '(none)'
+    
+    log_entry = f"""
+{'='*80}
+[{timestamp}] {method} {url}
+Picking: {picking_name or 'N/A'}
+{'='*80}
+
+--- REQUEST HEADERS ---
+{json.dumps(safe_headers, indent=2)}
+
+--- REQUEST PAYLOAD ---
+{payload_str}
+
+--- RESPONSE [{response_status}] ---
+{response_str}
+
+"""
+    
+    try:
+        with open(log_path, 'a', encoding='utf-8') as f:
+            f.write(log_entry)
+        _logger.debug(f"Debug log written to {log_path}")
+    except Exception as e:
+        _logger.warning(f"Could not write debug log to {log_path}: {e}")
 
 class StockPicking(models.Model):
     _inherit = 'stock.picking'
@@ -299,23 +379,40 @@ class StockPicking(models.Model):
         }
 
         try:
-            import json as json_lib
-            _logger.info(f"Sending Picking {self.name} to e-Transport at {api_url}/tms/import-data")
-            _logger.debug(f"Payload being sent: {json_lib.dumps(payload, indent=2, default=str)}")
+            full_url = f"{api_url}/tms/import-data"
+            _logger.info(f"Sending Picking {self.name} to e-Transport at {full_url}")
+            _logger.debug(f"Payload being sent: {json.dumps(payload, indent=2, default=str)}")
             
             response = requests.post(
-                f"{api_url}/tms/import-data",
+                full_url,
                 json=payload,
                 headers=headers,
                 timeout=30
             )
+            
+            # Write debug log if enabled
+            debug_mode = config.get_param('logistics_3pl_connector.debug_mode', 'False').lower() == 'true'
+            if debug_mode:
+                try:
+                    response_data_for_log = response.json()
+                except Exception:
+                    response_data_for_log = response.text
+                _write_debug_log(
+                    method='POST',
+                    url=full_url,
+                    headers=headers,
+                    payload=payload,
+                    response_status=response.status_code,
+                    response_body=response_data_for_log,
+                    picking_name=self.name
+                )
             
             if response.status_code == 200:
                 response_data = response.json()
                 status = response_data.get('status', '')
                 
                 # Log full response for debugging
-                _logger.info(f"e-Transport response for {self.name}: {json_lib.dumps(response_data, indent=2, default=str)}")
+                _logger.info(f"e-Transport response for {self.name}: {json.dumps(response_data, indent=2, default=str)}")
                 
                 if status in ('success', 'warning'):
                     # Get TMS ID from mapping if available
@@ -374,7 +471,7 @@ class StockPicking(models.Model):
                     
                     self.write({'x_3pl_status': 'error'})
                     self.message_post(body=error_msg)
-                    _logger.error(f"e-Transport Error for {self.name}: {json_lib.dumps(response_data, indent=2, default=str)}")
+                    _logger.error(f"e-Transport Error for {self.name}: {json.dumps(response_data, indent=2, default=str)}")
                     raise UserError(_("e-Transport Error: %s") % status)
             else:
                 error_msg = _("❌ e-Transport API Error: HTTP %s") % response.status_code
@@ -416,18 +513,37 @@ class StockPicking(models.Model):
         external_ref = self.name
         
         try:
+            full_url = f"{api_url}/tms/tracking/{external_ref}"
+            params = {
+                'include_traceability': 'true',
+                'include_packs': 'true',
+                'traceability_limit': 10
+            }
             _logger.info(f"Fetching tracking for {external_ref} from e-Transport")
             
             response = requests.get(
-                f"{api_url}/tms/tracking/{external_ref}",
+                full_url,
                 headers=headers,
-                params={
-                    'include_traceability': 'true',
-                    'include_packs': 'true',
-                    'traceability_limit': 10
-                },
+                params=params,
                 timeout=15
             )
+            
+            # Write debug log if enabled
+            debug_mode = config.get_param('logistics_3pl_connector.debug_mode', 'False').lower() == 'true'
+            if debug_mode:
+                try:
+                    response_data_for_log = response.json()
+                except Exception:
+                    response_data_for_log = response.text
+                _write_debug_log(
+                    method='GET',
+                    url=f"{full_url}?{requests.compat.urlencode(params)}",
+                    headers=headers,
+                    payload=None,
+                    response_status=response.status_code,
+                    response_body=response_data_for_log,
+                    picking_name=self.name
+                )
             
             if response.status_code == 200:
                 data = response.json()

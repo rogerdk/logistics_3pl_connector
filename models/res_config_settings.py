@@ -66,6 +66,15 @@ class ResConfigSettings(models.TransientModel):
              "Use with caution in production as it may create duplicate orders in the 3PL system."
     )
     
+    # === Debug Settings ===
+    logistics_3pl_debug_mode = fields.Boolean(
+        string="Debug Mode",
+        config_parameter='logistics_3pl_connector.debug_mode',
+        default=False,
+        help="If enabled, all API requests and responses will be logged to a file. "
+             "File location: /var/log/odoo/3pl_debug.log or /tmp/3pl_debug.log"
+    )
+    
     # === Tracking Settings ===
     logistics_3pl_tracking_url_base = fields.Char(
         string="Tracking URL Base",

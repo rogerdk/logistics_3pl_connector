@@ -85,6 +85,20 @@
                         </div>
                     </setting>
                     
+                    <!-- Debug Settings -->
+                    <setting id="logistics_3pl_debug" string="Debug" help="Opciones de depuración para desarrollo.">
+                        <div class="content-group">
+                            <div class="mt16">
+                                <field name="logistics_3pl_debug_mode"/>
+                                <label for="logistics_3pl_debug_mode"/>
+                                <div class="text-muted small text-warning">
+                                    <i class="fa fa-bug"/> Registra todas las peticiones y respuestas API en un archivo.
+                                    Ubicación: /var/log/odoo/3pl_debug.log o /tmp/3pl_debug.log
+                                </div>
+                            </div>
+                        </div>
+                    </setting>
+                    
                     <!-- Tracking Settings -->
                     <setting id="logistics_3pl_tracking" string="Tracking" help="Configuración de seguimiento.">
                         <div class="content-group">

@@ -34,6 +34,10 @@
                 <!-- Send to 3PL: available when picking is eligible and Ready (assigned) with draft/error status -->
                 <button name="action_send_to_3pl" string="Enviar a e-Transport" type="object" class="oe_highlight"
                         invisible="not x_3pl_eligible or state != 'assigned' or x_3pl_status not in ('draft', 'error')"/>
+                <!-- Send to 3PL (post-validation): available when picking is done but was never sent (draft status) -->
+                <button name="action_send_to_3pl" string="Enviar a e-Transport" type="object" class="oe_highlight"
+                        invisible="not x_3pl_eligible or state != 'done' or x_3pl_status != 'draft'"
+                        confirm="El albarán ya está validado. ¿Deseas enviarlo a e-Transport de todos modos?"/>
                 <!-- Re-send to 3PL: available for retry when status is error and picking is NOT in assigned state -->
                 <button name="action_send_to_3pl" string="Reenviar a e-Transport" type="object" 
                         class="btn-warning"

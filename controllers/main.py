@@ -3,6 +3,7 @@ from odoo.http import request, Response
 from markupsafe import Markup
 import json
 import logging
+from ..models.stock_picking import _write_debug_log
 
 _logger = logging.getLogger(__name__)
 
@@ -260,6 +261,22 @@ class Logistics3PLController(http.Controller):
                     _logger.error(f"3PL Webhook: Could not auto-validate {order_ref}: {validate_error}", exc_info=True)
 
             _logger.info(f"3PL Webhook: Successfully updated {order_ref} with tracking {tracking_ref}, URL: {tracking_url}")
+            
+            # Debug logging for webhook
+            debug_mode = request.env['ir.config_parameter'].sudo().get_param(
+                'logistics_3pl_connector.debug_mode', 'False'
+            ).lower() == 'true'
+            if debug_mode:
+                _write_debug_log(
+                    method='WEBHOOK',
+                    url='/api/v1/3pl/webhook',
+                    headers={'Authorization': auth_header},
+                    payload=data,
+                    response_status=200,
+                    response_body={'status': 'success', 'order_id': order_ref, 'tracking_url': tracking_url},
+                    picking_name=order_ref
+                )
+            
             return json_response({'status': 'success', 'order_id': order_ref, 'tracking_url': tracking_url})
 
         except Exception as e:
