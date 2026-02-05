@@ -16,19 +16,44 @@
                 <field name="picking_type_code" invisible="1"/>
             </xpath>
 
+            <!-- Hide native Validate button(s) when in waiting_3pl state -->
+            <!-- In Odoo core, there are two button_validate buttons:
+                 1. One with class="oe_highlight" (blue) - invisible="state in ('draft', 'confirmed', 'done', 'cancel')"
+                 2. One with class="o_btn_validate" (gray) - invisible="state in ('waiting', 'assigned', 'done', 'cancel')"
+                 We need to add 'waiting_3pl' to both invisible conditions
+                 Using hasclass() function as recommended by Odoo -->
+            <xpath expr="//header//button[@name='button_validate'][hasclass('oe_highlight')]" position="attributes">
+                <attribute name="invisible">state in ('draft', 'confirmed', 'done', 'cancel', 'waiting_3pl')</attribute>
+            </xpath>
+            <xpath expr="//header//button[@name='button_validate'][hasclass('o_btn_validate')]" position="attributes">
+                <attribute name="invisible">state in ('waiting', 'assigned', 'done', 'cancel', 'waiting_3pl')</attribute>
+            </xpath>
+
             <!-- Add custom 3PL buttons -->
             <xpath expr="//header" position="inside">
-                <!-- Send to 3PL: available when picking is eligible and Ready (assigned) -->
-                <button name="action_send_to_3pl" string="Send to 3PL" type="object" class="oe_highlight"
+                <!-- Send to 3PL: available when picking is eligible and Ready (assigned) with draft/error status -->
+                <button name="action_send_to_3pl" string="Enviar a e-Transport" type="object" class="oe_highlight"
                         invisible="not x_3pl_eligible or state != 'assigned' or x_3pl_status not in ('draft', 'error')"/>
+                <!-- Re-send to 3PL: available for retry when status is error and picking is NOT in assigned state -->
+                <button name="action_send_to_3pl" string="Reenviar a e-Transport" type="object" 
+                        class="btn-warning"
+                        invisible="not x_3pl_eligible or x_3pl_status != 'error' or state == 'assigned'"/>
+                <!-- Fetch Tracking: available when sent to 3PL and waiting or shipped -->
+                <button name="action_fetch_tracking" string="Actualizar Tracking" type="object" 
+                        class="btn-secondary"
+                        invisible="x_3pl_status not in ('sent', 'shipped')"/>
+                <!-- Resend to 3PL: available when allow_resend is enabled and already sent -->
+                <button name="action_send_to_3pl" string="Reenviar a e-Transport" type="object" 
+                        class="btn-warning"
+                        invisible="not x_3pl_can_resend"
+                        confirm="Esto reenviará el pedido a e-Transport. Puede crear duplicados si el 3PL no maneja actualizaciones por ExternalRef. ¿Continuar?"/>
                 <!-- Validar 3PL: available when waiting for 3PL (validates without waiting for webhook) -->
-                <!-- Distinct label to differentiate from native Validar button -->
                 <button name="action_force_validate" string="Validar (Forzar)" type="object" 
                         class="oe_highlight"
                         invisible="state != 'waiting_3pl'"
                         confirm="Això validarà l'entrega sense esperar la confirmació del 3PL. Estàs segur?"/>
                 <!-- Track shipment: available when tracking URL exists -->
-                <button name="action_open_3pl_tracking" string="Track Shipment" type="object" 
+                <button name="action_open_3pl_tracking" string="Ver Tracking" type="object" 
                         class="btn-info"
                         invisible="not x_3pl_tracking_url"/>
             </xpath>
@@ -38,14 +63,21 @@
                 <field name="x_3pl_tracking_url" invisible="1"/>
                 <field name="x_3pl_status" invisible="1"/>
                 <field name="x_3pl_eligible" invisible="1"/>
+                <field name="x_3pl_can_resend" invisible="1"/>
             </xpath>
             
             <xpath expr="//notebook" position="inside">
-                <page string="3PL Logistics" name="3pl_logistics" invisible="not x_3pl_eligible">
+                <page string="e-Transport 3PL" name="3pl_logistics" invisible="not x_3pl_eligible">
                     <group>
-                        <group string="3PL Information">
+                        <group string="e-Transport Information">
                             <field name="x_3pl_order_id"/>
-                            <field name="x_3pl_status"/>
+                            <field name="x_3pl_status" widget="badge"
+                                   decoration-muted="x_3pl_status == 'draft'"
+                                   decoration-info="x_3pl_status == 'sent'"
+                                   decoration-warning="x_3pl_status == 'shipped'"
+                                   decoration-success="x_3pl_status == 'delivered'"
+                                   decoration-danger="x_3pl_status == 'error'"/>
+                            <field name="x_3pl_current_state" invisible="not x_3pl_current_state"/>
                         </group>
                         <group string="Tracking">
                             <field name="x_3pl_tracking_ref"/>
@@ -67,7 +99,8 @@
                 <field name="x_3pl_status" optional="show" widget="badge" 
                        decoration-muted="x_3pl_status == 'draft'"
                        decoration-info="x_3pl_status == 'sent'"
-                       decoration-success="x_3pl_status == 'shipped'"
+                       decoration-warning="x_3pl_status == 'shipped'"
+                       decoration-success="x_3pl_status == 'delivered'"
                        decoration-danger="x_3pl_status == 'error'"/>
             </field>
         </field>

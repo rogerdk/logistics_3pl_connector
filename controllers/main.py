@@ -109,6 +109,16 @@ class Logistics3PLController(http.Controller):
                 }, 400)
 
             # 3. Update Picking
+            # IMPORTANT: Save the current state BEFORE writing updates
+            # Because changing x_3pl_status will trigger _compute_state and change the state
+            original_state = picking.state
+            should_auto_validate = (
+                status and 
+                status.lower() == 'shipped' and 
+                original_state == 'waiting_3pl'
+            )
+            _logger.info(f"3PL Webhook: {order_ref} - original_state={original_state}, should_auto_validate={should_auto_validate}")
+            
             vals = {}
             if tracking_ref:
                 vals['x_3pl_tracking_ref'] = tracking_ref
@@ -157,14 +167,97 @@ class Logistics3PLController(http.Controller):
                     author_id=odoobot.id if odoobot else False,
                     message_type='notification'
                 )
-                
-                # Auto-validate picking when shipped (if in waiting_3pl state)
-                if status and status.lower() == 'shipped' and picking.state == 'waiting_3pl':
-                    try:
-                        picking.with_context(skip_3pl_check=True).button_validate()
-                        _logger.info(f"3PL Webhook: Auto-validated picking {order_ref}")
-                    except Exception as validate_error:
-                        _logger.warning(f"3PL Webhook: Could not auto-validate {order_ref}: {validate_error}")
+            
+            # Auto-validate picking when shipped (if it WAS in waiting_3pl state)
+            # We use should_auto_validate which was determined BEFORE writing updates
+            if should_auto_validate:
+                try:
+                    _logger.info(f"3PL Webhook: Attempting to auto-validate picking {order_ref}")
+                    
+                    # Get user for validation (required because auth='none' has no user context)
+                    # Priority: 1) Configured webhook user, 2) OdooBot as fallback
+                    # Best practice: Configure a dedicated user with only Inventory permissions
+                    webhook_user = None
+                    config_param = request.env['ir.config_parameter'].sudo()
+                    webhook_user_id = config_param.get_param('logistics_3pl_connector.webhook_user_id')
+                    
+                    if webhook_user_id:
+                        try:
+                            webhook_user = request.env['res.users'].sudo().browse(int(webhook_user_id))
+                            if not webhook_user.exists() or not webhook_user.active:
+                                _logger.warning(f"3PL Webhook: Configured webhook user (id={webhook_user_id}) not found or inactive, falling back to OdooBot")
+                                webhook_user = None
+                            else:
+                                _logger.info(f"3PL Webhook: Using configured webhook user: {webhook_user.name} (id={webhook_user.id})")
+                        except (ValueError, TypeError) as e:
+                            _logger.warning(f"3PL Webhook: Invalid webhook_user_id config: {e}, falling back to OdooBot")
+                    
+                    # Fallback to OdooBot if no configured user
+                    if not webhook_user:
+                        # Get OdooBot user (ID=1) as fallback
+                        webhook_user = request.env['res.users'].sudo().browse(1)
+                        if webhook_user.exists():
+                            _logger.info("3PL Webhook: Using OdooBot (fallback). Consider configuring a dedicated webhook user for better security.")
+                        else:
+                            webhook_user = None
+                    
+                    if not webhook_user or not webhook_user.exists():
+                        _logger.error("3PL Webhook: Could not find any user for validation")
+                        raise Exception("No user available for auto-validation")
+                    
+                    # IMPORTANT: Refresh picking from database to get current state after write
+                    # The write() above triggered _compute_state which changed the state
+                    picking = request.env['stock.picking'].with_user(webhook_user).browse(picking.id)
+                    picking.ensure_one()
+                    _logger.info(f"3PL Webhook: Picking {order_ref} current state after refresh: {picking.state}")
+                    
+                    # Call button_validate with context flags to:
+                    # - skip_3pl_check: bypass our 3PL blocking logic
+                    # - skip_3pl_auto_send: prevent recursion
+                    # - skip_sms: skip SMS confirmation wizard
+                    # - skip_backorder: auto-handle backorders without wizard
+                    # - button_validate_picking_ids: required for batch validation
+                    validate_ctx = {
+                        'skip_3pl_check': True,
+                        'skip_3pl_auto_send': True,
+                        'skip_sms': True,
+                        'skip_backorder': True,
+                        'button_validate_picking_ids': picking.ids,
+                    }
+                    
+                    # Validate the picking
+                    _logger.info(f"3PL Webhook: Calling button_validate for {order_ref}")
+                    result = picking.with_context(**validate_ctx).button_validate()
+                    _logger.info(f"3PL Webhook: button_validate returned: {result}")
+                    
+                    # If result is a wizard action, we need to confirm it
+                    if isinstance(result, dict) and result.get('res_model'):
+                        wizard_model = result.get('res_model')
+                        wizard_id = result.get('res_id')
+                        _logger.info(f"3PL Webhook: Wizard returned: {wizard_model} (id={wizard_id}). Attempting to process...")
+                        
+                        # Try to process the wizard automatically
+                        if wizard_id and wizard_model:
+                            # Use with_user() to set webhook user context for wizard processing
+                            wizard = request.env[wizard_model].with_user(webhook_user).browse(wizard_id)
+                            if hasattr(wizard, 'process'):
+                                wizard.with_context(**validate_ctx).process()
+                                _logger.info(f"3PL Webhook: Wizard {wizard_model} processed")
+                            elif hasattr(wizard, 'action_confirm'):
+                                wizard.with_context(**validate_ctx).action_confirm()
+                                _logger.info(f"3PL Webhook: Wizard {wizard_model} confirmed")
+                            elif hasattr(wizard, 'action_done'):
+                                wizard.with_context(**validate_ctx).action_done()
+                                _logger.info(f"3PL Webhook: Wizard {wizard_model} done")
+                    
+                    # Re-read picking to get updated state from database
+                    picking.invalidate_recordset(['state'])
+                    picking = request.env['stock.picking'].with_user(webhook_user).browse(picking.id)
+                    _logger.info(f"3PL Webhook: Auto-validated picking {order_ref}. Final state: {picking.state}")
+                    if picking.state != 'done':
+                        _logger.warning(f"3PL Webhook: Picking {order_ref} validation completed but state is still '{picking.state}', expected 'done'")
+                except Exception as validate_error:
+                    _logger.error(f"3PL Webhook: Could not auto-validate {order_ref}: {validate_error}", exc_info=True)
 
             _logger.info(f"3PL Webhook: Successfully updated {order_ref} with tracking {tracking_ref}, URL: {tracking_url}")
             return json_response({'status': 'success', 'order_id': order_ref, 'tracking_url': tracking_url})

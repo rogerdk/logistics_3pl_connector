@@ -1,13 +1,13 @@
-# Especificación de Integración 3PL para Odoo 19 (Community Edition)
+# Especificación de Integración e-Transport TMS para Odoo 19 (Community Edition)
 
-Este documento detalla la arquitectura y diseño técnico para integrar Odoo 19 CE (On-Premise) con un operador logístico (3PL) utilizando una API genérica.
+Este documento detalla la arquitectura y diseño técnico para integrar Odoo 19 CE (On-Premise) con e-Transport TMS.
 
 ## 1. Arquitectura de la Integración
 
 La integración es bidireccional y consta de dos flujos principales:
 
-1.  **Outbound (Odoo -> 3PL):** Envío de órdenes de entrega (Albaranes) cuando se validan en Odoo.
-2.  **Inbound (3PL -> Odoo):** Actualización de estado, tracking number y confirmación de stock mediante Webhooks.
+1.  **Outbound (Odoo -> e-Transport):** Envío de órdenes de entrega (Albaranes) cuando se validan en Odoo.
+2.  **Inbound (e-Transport -> Odoo):** Actualización de estado y tracking mediante fetch manual o Webhooks.
 
 ### Diagrama de Flujo
 
@@ -15,135 +15,303 @@ La integración es bidireccional y consta de dos flujos principales:
 sequenceDiagram
     participant User as Usuario Odoo
     participant Odoo
-    participant 3PL as API 3PL
+    participant eTrans as e-Transport TMS
 
     %% Outbound Flow
     User->>Odoo: Valida Albarán (stock.picking)
-    Odoo->>3PL: POST /api/orders (Datos del envío)
-    3PL-->>Odoo: 200 OK (Order ID externo)
-    Odoo->>Odoo: Guarda Order ID externo y cambia estado a "Enviado a 3PL"
+    Odoo->>eTrans: POST /tms/import-data (Orders)
+    eTrans-->>Odoo: 200 OK (status, mapping)
+    Odoo->>Odoo: Guarda TMS ID y cambia estado a "Enviado"
 
-    %% Inbound Flow (Webhook)
-    3PL->>Odoo: POST /json/2/stock.picking/update_tracking
+    %% Tracking Flow (Manual)
+    User->>Odoo: Click "Actualizar Tracking"
+    Odoo->>eTrans: GET /tms/tracking/{external_ref}
+    eTrans-->>Odoo: 200 OK (current_state, traceability)
+    Odoo->>Odoo: Actualiza estado y muestra eventos
+
+    %% Webhook Flow (Optional)
+    eTrans->>Odoo: POST /api/v1/3pl/webhook
     Note right of Odoo: Autenticación (API Key)
     Odoo->>Odoo: Actualiza Tracking y Estado
-    Odoo-->>3PL: 200 OK
+    Odoo-->>eTrans: 200 OK
 ```
 
-## 2. Especificidades de Odoo 19
+## 2. API de e-Transport
 
-En Odoo 19, se recomienda preparar la transición hacia la nueva API JSON-2, aunque en versiones On-Premise CE los controladores tradicionales RPC siguen activos.
+### 2.1 Autenticación
 
-### API de Salida (Outbound)
-Para las llamadas hacia el 3PL, se utilizará la librería estándar `requests` de Python.
-- **Librería:** `requests` (incluida en el entorno estándar de Odoo).
-- **Endpoint:** `POST {API_URL}/orders`
-- **Headers:** `Content-Type: application/json`, `Authorization: Bearer {API_KEY}`
-- **Payload:** Ver sección 3.1 para el formato completo.
-- **Respuesta Esperada:** El 3PL debe responder con código 200 o 201 y un JSON con el campo `order_id` (ID externo del pedido en el sistema 3PL):
-  ```json
-  {
-    "order_id": "EXT-12345"
+Todas las llamadas a la API requieren el header:
+```
+X-API-Key: YOUR_PROJECT_TOKEN
+```
+
+### 2.2 Endpoint de Importación (Outbound)
+
+**Endpoint:** `POST https://e-transport.es/api/tms/import-data`
+
+**Payload de ejemplo:**
+```json
+{
+  "Orders": [
+    {
+      "ExternalRef": "WH/OUT/00001",
+      "ShipmentType": "E",
+      "ServiceType": "ND_3H",
+      "Legs": [
+        {
+          "UnLoadName": "Cliente Ejemplo S.L.",
+          "UnLoadAddress": "Carrer Major 123",
+          "UnLoadCity": "Barcelona",
+          "UnLoadZip": "08015",
+          "UnLoadCountry": "ES",
+          "UnLoadDate": "2025-03-15",
+          "UnLoadStartTime": "08:00",
+          "UnLoadEndTime": "11:00",
+          "UnLoadTel": "+34612345678",
+          "UnLoadEmail": "cliente@example.com",
+          "Goods": [
+            {
+              "Packs": 3,
+              "PacksTypeID": "PROD-001",
+              "PacksDescription": "Producto Congelado",
+              "PacksTemperature": "FR",
+              "GrossWeight": 25.0,
+              "Cube": 0.3,
+              "Parcels": []
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+**Campos del Payload:**
+
+| Campo | Tipo | Requerido | Descripción |
+|-------|------|-----------|-------------|
+| `ExternalRef` | string | ✅ | Referencia única (nombre del albarán) |
+| `ShipmentType` | string | ✅ | Tipo de envío (E=Entrega, M=Movimiento) |
+| `ServiceType` | string | ✅ | Tipo de servicio (ej: ND_3H) |
+| `UnLoadName` | string | ✅ | Nombre del destinatario |
+| `UnLoadAddress` | string | ✅ | Dirección de entrega |
+| `UnLoadCity` | string | ✅ | Ciudad |
+| `UnLoadZip` | string | ✅ | Código postal |
+| `UnLoadCountry` | string | ✅ | Código de país (ES, FR, etc.) |
+| `UnLoadDate` | string | ❌ | Fecha de entrega (YYYY-MM-DD) |
+| `UnLoadStartTime` | string | ❌ | Hora inicio franja (HH:MM) |
+| `UnLoadEndTime` | string | ❌ | Hora fin franja (HH:MM) |
+| `UnLoadTel` | string | ❌ | Teléfono del destinatario |
+| `UnLoadEmail` | string | ❌ | Email del destinatario |
+| `Packs` | integer | ❌ | Número de bultos |
+| `PacksTypeID` | string | ✅ | Código/identificador del producto |
+| `PacksDescription` | string | ❌ | Descripción del producto |
+| `PacksTemperature` | string | ✅ | Temperatura (AM, FR, CO) |
+| `GrossWeight` | float | ❌ | Peso total en kg |
+| `Cube` | float | ❌ | Volumen en m³ |
+
+**Respuesta esperada:**
+```json
+{
+  "status": "success",
+  "orders_created": 1,
+  "orders_updated": 0,
+  "warnings": [],
+  "errors": [],
+  "mapping": {
+    "orders": {
+      "WH/OUT/00001": 4589
+    }
   }
-  ```
-- **Manejo de Errores:** Los errores 4xx y 5xx se registran en el chatter del albarán y se cambia el estado 3PL a "Error". El usuario puede reintentar manualmente.
+}
+```
 
-### API de Entrada (Inbound / Webhooks)
-Para recibir notificaciones del 3PL, se recomienda exponer un endpoint dedicado tipo `Controller` o utilizar la API nativa si el 3PL puede adaptarse al formato de Odoo.
+### 2.3 Endpoint de Tracking
 
-Dada la rigidez de los formatos externos, lo habitual es crear un **Controller HTTP (`@http.route`)** que actúe como adaptador:
+**Endpoint:** `GET https://e-transport.es/api/tms/tracking/{external_ref}`
 
-**Endpoint Implementado:** `/api/v1/3pl/webhook`
-**Método:** `POST`
-**Autenticación:** Header `Authorization: Bearer <API_KEY>` (debe coincidir con la API Key configurada en Odoo)
-**Payload Esperado (Ejemplo):**
+**Parámetros de query:**
+- `include_traceability` (default: true)
+- `include_packs` (default: true)
+- `traceability_limit` (default: 50)
+
+**Respuesta esperada:**
+```json
+{
+  "external_ref": "WH/OUT/00001",
+  "current_state": "en_ruta",
+  "date": "2025-03-15",
+  "time_range": "08:00 - 11:00",
+  "eta": "2025-03-15T09:30:00",
+  "traceability": [
+    {
+      "timestamp": "2025-03-15T08:15:00",
+      "state": "salida_almacen",
+      "event": "Vehículo salió del almacén",
+      "location": "Barcelona Hub"
+    }
+  ],
+  "parcels": []
+}
+```
+
+## 3. Configuración en Odoo
+
+### 3.1 Parámetros de Configuración
+
+Accesible en: **Ajustes > Inventario > e-Transport 3PL Integration**
+
+| Parámetro | Descripción | Valor por defecto |
+|-----------|-------------|-------------------|
+| **Conexión API** | | |
+| API URL | URL base de e-Transport | `https://e-transport.es/api` |
+| API Key | Token X-API-Key | - |
+| 3PL Warehouse | Almacén para filtrar albaranes | - (todos) |
+| **Parámetros e-Transport** | | |
+| ShipmentType (eCommerce) | Código para pedidos web | `E` |
+| ShipmentType (Internal) | Código para pedidos internos | `M` |
+| ServiceType | Código de servicio | `ND_3H` |
+| Default Temperature | Temperatura por defecto | `FR` (Frío) |
+| **Automatización** | | |
+| Auto Send | Envío automático al validar | `False` |
+| Web Orders Only | Solo pedidos eCommerce (sub-opción de Auto Send) | `False` |
+| Allow Resend to 3PL | Permite reenviar pedidos ya enviados | `False` |
+| **Tracking** | | |
+| Tracking URL Base | URL base para construir enlaces de seguimiento | `https://e-transport.es/tracking/` |
+| Webhook User | Usuario para operaciones automáticas desde webhook | OdooBot (fallback) |
+
+### 3.2 Temperaturas Disponibles
+
+| Código | Descripción |
+|--------|-------------|
+| `AM` | Ambiente |
+| `FR` | Frío (refrigerado) |
+| `CO` | Congelado |
+
+## 4. Flujo de Trabajo en Odoo
+
+### 4.1 Estados del Albarán
+
+#### Estados nativos de Odoo + estado intermedio 3PL
+
+| Estado (`state`) | Descripción |
+|------------------|-------------|
+| `draft` | Borrador |
+| `confirmed` | Confirmado |
+| `assigned` | Listo (reservado) |
+| `waiting_3pl` | **Esperando confirmación del 3PL** (nuevo) |
+| `done` | Hecho |
+| `cancel` | Cancelado |
+
+#### Estados 3PL (`x_3pl_status`)
+
+| Estado | Descripción | Badge Color |
+|--------|-------------|-------------|
+| `draft` | No enviado | ⚪ Gris |
+| `sent` | Enviado a e-Transport | 🔵 Azul |
+| `shipped` | En tránsito | 🟠 Naranja |
+| `delivered` | Entregado | 🟢 Verde |
+| `error` | Error en envío | 🔴 Rojo |
+
+### 4.2 Campos Adicionales
+
+| Campo | Descripción |
+|-------|-------------|
+| `x_3pl_order_id` | ID del pedido en e-Transport (TMS ID) |
+| `x_3pl_tracking_ref` | Número de tracking |
+| `x_3pl_tracking_url` | URL de seguimiento |
+| `x_3pl_current_state` | Estado actual reportado por e-Transport |
+| `x_3pl_eligible` | (Computed) Si el albarán es elegible para 3PL |
+| `x_3pl_can_resend` | (Computed) Si se puede reenviar |
+| `x_is_web_order` | (Computed) Si viene de un pedido eCommerce |
+
+### 4.3 Botones Disponibles
+
+| Botón | Visible cuando | Acción |
+|-------|----------------|--------|
+| **Enviar a e-Transport** | Estado `assigned`, status `draft` o `error`, elegible | Envía el albarán a e-Transport |
+| **Reenviar a e-Transport** (retry) | Status `error`, estado ≠ `assigned` | Reintenta el envío tras error |
+| **Reenviar a e-Transport** (resend) | `x_3pl_can_resend` = True (requiere `allow_resend`) | Reenvía pedido ya enviado |
+| **Actualizar Tracking** | Status `sent` o `shipped` | Consulta el tracking vía API |
+| **Validar (Forzar)** | Estado `waiting_3pl` | Valida sin esperar confirmación 3PL |
+| **Ver Tracking** | Existe `x_3pl_tracking_url` | Abre la URL de tracking en nueva pestaña |
+
+## 5. Mapeo de Campos Odoo → e-Transport
+
+| Campo Odoo | Campo e-Transport |
+|------------|-------------------|
+| `picking.name` | `ExternalRef` |
+| `picking.x_is_web_order` | Determina `ShipmentType` |
+| `partner.name` | `UnLoadName` |
+| `partner.street` | `UnLoadAddress` |
+| `partner.city` | `UnLoadCity` |
+| `partner.zip` | `UnLoadZip` |
+| `partner.country_id.code` | `UnLoadCountry` |
+| `partner.phone / mobile` | `UnLoadTel` |
+| `partner.email` | `UnLoadEmail` |
+| `picking.scheduled_delivery_date` | `UnLoadDate` |
+| `delivery_time_slot.start_hour` | `UnLoadStartTime` |
+| `delivery_time_slot.end_hour` | `UnLoadEndTime` |
+| `move.product_uom_qty` | `Packs` |
+| `product.default_code` | `PacksTypeID` |
+| `product.name` | `PacksDescription` |
+| Configuración global | `PacksTemperature` |
+| `product.weight * qty` | `GrossWeight` |
+| `product.volume * qty` | `Cube` |
+
+## 6. Infraestructura y Red
+
+### 6.1 Configuración de Gateway / Ingress (para Webhooks)
+
+Si e-Transport puede enviar webhooks, exponer el endpoint:
+
+Archivo: `argocd/apps/odoo/odoo/templates/httproute.yaml`
+
+```yaml
+rules:
+  - matches:
+      - path:
+          type: PathPrefix
+          value: /api/v1/3pl
+    backendRefs:
+      - name: odoo-service
+        port: 8069
+```
+
+### 6.2 Webhook Endpoint (Opcional)
+
+**Endpoint:** `POST /api/v1/3pl/webhook`
+
+**Headers requeridos:**
+```
+Authorization: Bearer <API_KEY>
+Content-Type: application/json
+```
+
+**Payload esperado:**
 ```json
 {
   "order_id": "WH/OUT/0001",
-  "tracking_number": "1Z999AA10123456784",
-  "tracking_url": "https://tracking.example.com/1Z999AA10123456784",
+  "tracking_number": "ET-123456",
+  "tracking_url": "https://e-transport.es/tracking/ET-123456",
   "status": "shipped"
 }
 ```
 
-**Notas sobre el Payload:**
-- `order_id`: Requerido. Debe coincidir exactamente con el nombre del albarán en Odoo.
-- `tracking_number`: Opcional. Si se proporciona sin `tracking_url`, se construye automáticamente usando la "Tracking URL Base" configurada.
-- `tracking_url`: Opcional. URL completa de seguimiento.
-- `status`: Opcional. Valores permitidos: `shipped`, `delivered`, `completed`, `error`. Solo `shipped` (y sus variantes) activa la auto-validación del albarán cuando está en estado `waiting_3pl`.
+## 7. Troubleshooting
 
-**Validaciones del Webhook:**
-- Solo acepta actualizaciones para albaranes en estados `waiting_3pl` o `assigned`.
-- Rechaza con error 400 si el albarán está en otro estado (ej. `done`, `cancel`, `draft`).
+### Error: "3PL API configuration is missing"
+→ Verificar que API URL y API Key están configurados en Ajustes > Inventario.
 
-## 3. Diseño del Módulo
+### Error: "401 Unauthorized"
+→ El token X-API-Key es inválido o ha expirado. Contactar con e-Transport.
 
-Se creará un nuevo módulo (ej. `logistics_3pl_connector`) con la siguiente estructura:
+### Error: "ShipmentType 'X' not found"
+→ Verificar que el ShipmentType configurado existe en e-Transport.
 
-```
-logistics_3pl_connector/
-├── __init__.py
-├── __manifest__.py
-├── models/
-│   ├── __init__.py
-│   ├── res_config_settings.py  # Configuración de API Keys y URL
-│   └── stock_picking.py        # Lógica de envío y campos extra
-├── controllers/
-│   ├── __init__.py
-│   └── main.py                 # Webhook endpoint
-└── views/
-    ├── res_config_settings_views.xml
-    └── stock_picking_views.xml
-```
+### Error: "Customer 'X' does not exist"
+→ e-Transport no reconoce el cliente. Puede requerir configuración previa.
 
-### 3.1. Modelo `stock.picking`
-Heredar de `stock.picking` para añadir:
-- `carrier_tracking_ref`: (Nativo) Referencia de seguimiento.
-- `x_3pl_order_id`: ID único del pedido en el sistema del 3PL.
-- `x_3pl_status`: Estado de la sincronización (Borrador, Enviado, Error, Sincronizado).
-- `action_send_to_3pl()`: Método invocado mediante botón manual o automáticamente si está habilitado el auto-envío al validar el albarán (solo si el albarán es elegible según el almacén configurado).
-
-### 3.2. Configuración (`res.config.settings`)
-No hardcodear credenciales. Añadir campos en Ajustes de Inventario:
-- `logistics_3pl_api_url`: Endpoint base del 3PL (almacenado en `ir.config_parameter` como `logistics_3pl_connector.api_url`).
-- `logistics_3pl_api_key`: Token de autenticación (usar widget `password`, almacenado en `ir.config_parameter` como `logistics_3pl_connector.api_key`).
-- `logistics_3pl_warehouse_id`: Almacén opcional. Si se configura, solo los albaranes de salida de este almacén serán elegibles para envío al 3PL. Si se deja vacío, todos los albaranes de salida son elegibles.
-- `logistics_3pl_auto_send`: Boolean para envío automático al validar (almacenado como `logistics_3pl_connector.auto_send`).
-- `logistics_3pl_tracking_url_base`: URL base para construir enlaces de tracking cuando el 3PL solo proporciona el número de tracking (por defecto: `https://tracking.example.com/odoo/`).
-
-### 3.3. Seguridad
-- **API Keys Salientes:** Guardarlas cifradas o usar `ir.config_parameter` con precaución. Lo ideal es integrarlo con Secretos de Kubernetes si es posible, o usar campos encriptados de Odoo Enterprise (si aplica), en CE usar campos simples con permisos restringidos.
-- **Webhooks Entrantes:** El Controller valida el token usando el header `Authorization: Bearer <API_KEY>` que debe coincidir exactamente con la API Key configurada en Odoo (almacenada en `ir.config_parameter`).
-
-## 4. Infraestructura y Red
-
-Para que el 3PL pueda contactar con Odoo (On-Premise en Kubernetes), se debe exponer el servicio de manera segura.
-
-### Configuración de Gateway / Ingress
-Asegurar que la ruta HTTP permite el tráfico al endpoint del webhook.
-
-Archivo: `argocd/apps/odoo/odoo/templates/httproute.yaml` (o Ingress equivalente)
-
-```yaml
-  rules:
-    - matches:
-        - path:
-            type: PathPrefix
-            value: /api/v1/3pl  # Ruta específica para el webhook
-      backendRefs:
-        - name: odoo-service
-          port: 8069
-```
-
-### Consideraciones de Firewall
-- Permitir solo las IPs del 3PL si son conocidas.
-- Usar HTTPS (TLS) obligatorio.
-
-## 5. Pasos de Implementación
-
-1.  **Scaffold del Módulo:** Crear estructura básica.
-2.  **Configuración:** Implementar `res.config.settings`.
-3.  **Conexión Saliente:** Implementar método `requests.post` en `stock.picking` y conectar al botón `button_validate`.
-4.  **Conexión Entrante:** Implementar Controller y probar con `curl`.
-5.  **Tests:** Crear Unit Tests con `unittest.mock` para simular respuestas del 3PL.
-
+### El tracking no se actualiza
+→ Usar el botón "Actualizar Tracking" para forzar una consulta manual.

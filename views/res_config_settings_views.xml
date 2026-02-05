@@ -6,29 +6,101 @@
         <field name="inherit_id" ref="stock.res_config_settings_view_form"/>
         <field name="arch" type="xml">
             <xpath expr="//block[@name='operations_setting_container']" position="after">
-                <h2>3PL Integration</h2>
+                <h2>e-Transport 3PL Integration</h2>
                 <div class="row mt16 o_settings_container" name="logistics_3pl_setting_container">
-                    <setting id="logistics_3pl_settings" string="3PL Configuration" help="Configure generic 3PL integration settings.">
+                    <!-- Connection Settings -->
+                    <setting id="logistics_3pl_connection" string="Conexión API" help="Configuración de conexión con e-Transport.">
                         <div class="content-group">
                             <div class="mt16">
                                 <label for="logistics_3pl_api_url" class="o_light_label"/>
-                                <field name="logistics_3pl_api_url" class="oe_inline" placeholder="https://api.3pl.com"/>
+                                <field name="logistics_3pl_api_url" class="oe_inline" placeholder="https://e-transport.es/api"/>
                             </div>
                             <div class="mt16">
                                 <label for="logistics_3pl_api_key" class="o_light_label"/>
                                 <field name="logistics_3pl_api_key" password="True" class="oe_inline"/>
+                                <div class="text-muted small">Token X-API-Key proporcionado por e-Transport</div>
                             </div>
                             <div class="mt16">
                                 <label for="logistics_3pl_warehouse_id" class="o_light_label"/>
                                 <field name="logistics_3pl_warehouse_id" class="oe_inline"/>
+                                <div class="text-muted small">Si se configura, solo los albaranes de este almacén se enviarán al 3PL</div>
                             </div>
+                        </div>
+                    </setting>
+                    
+                    <!-- e-Transport Specific Settings -->
+                    <setting id="logistics_3pl_etransport" string="Parámetros e-Transport" help="Configuración específica para e-Transport TMS.">
+                        <div class="content-group">
+                            <div class="row mt16">
+                                <div class="col-6">
+                                    <label for="logistics_3pl_shipment_type" class="o_light_label"/>
+                                    <field name="logistics_3pl_shipment_type" class="oe_inline" placeholder="E"/>
+                                    <div class="text-muted small">Para pedidos eCommerce (ej: E=Entrega)</div>
+                                </div>
+                                <div class="col-6">
+                                    <label for="logistics_3pl_shipment_type_internal" class="o_light_label"/>
+                                    <field name="logistics_3pl_shipment_type_internal" class="oe_inline" placeholder="M"/>
+                                    <div class="text-muted small">Para pedidos internos (ej: M=Movimiento)</div>
+                                </div>
+                            </div>
+                            <div class="row mt16">
+                                <div class="col-6">
+                                    <label for="logistics_3pl_service_type" class="o_light_label"/>
+                                    <field name="logistics_3pl_service_type" class="oe_inline" placeholder="ND_3H"/>
+                                    <div class="text-muted small">Código de servicio (ej: ND_3H)</div>
+                                </div>
+                                <div class="col-6">
+                                    <label for="logistics_3pl_default_temperature" class="o_light_label"/>
+                                    <field name="logistics_3pl_default_temperature" class="oe_inline"/>
+                                    <div class="text-muted small">Temperatura por defecto para mercancías</div>
+                                </div>
+                            </div>
+                        </div>
+                    </setting>
+                    
+                    <!-- Automation Settings -->
+                    <setting id="logistics_3pl_automation" string="Automatización" help="Configuración de envío automático.">
+                        <div class="content-group">
                             <div class="mt16">
                                 <field name="logistics_3pl_auto_send"/>
                                 <label for="logistics_3pl_auto_send"/>
                             </div>
+                            <div class="mt16 ms-4" invisible="not logistics_3pl_auto_send">
+                                <field name="logistics_3pl_web_orders_only"/>
+                                <label for="logistics_3pl_web_orders_only"/>
+                                <div class="text-muted small">
+                                    Si está activado, el auto-envío solo aplica a pedidos web (eCommerce).
+                                    Los pedidos manuales/backend se pueden enviar manualmente con el botón "Send to 3PL".
+                                </div>
+                            </div>
+                            <div class="mt16">
+                                <field name="logistics_3pl_allow_resend"/>
+                                <label for="logistics_3pl_allow_resend"/>
+                                <div class="text-muted small text-warning">
+                                    <i class="fa fa-exclamation-triangle"/> Permite reenviar pedidos ya enviados a e-Transport.
+                                    Útil para testing o cuando hay problemas con el 3PL.
+                                    Usar con precaución: puede crear duplicados si e-Transport no actualiza por ExternalRef.
+                                </div>
+                            </div>
+                        </div>
+                    </setting>
+                    
+                    <!-- Tracking Settings -->
+                    <setting id="logistics_3pl_tracking" string="Tracking" help="Configuración de seguimiento.">
+                        <div class="content-group">
                             <div class="mt16">
                                 <label for="logistics_3pl_tracking_url_base" class="o_light_label"/>
-                                <field name="logistics_3pl_tracking_url_base" class="oe_inline" placeholder="https://tracking.example.com/odoo/"/>
+                                <field name="logistics_3pl_tracking_url_base" class="oe_inline" placeholder="https://e-transport.es/tracking/"/>
+                            </div>
+                            <div class="mt16">
+                                <label for="logistics_3pl_webhook_user_id" class="o_light_label"/>
+                                <field name="logistics_3pl_webhook_user_id" class="oe_inline" 
+                                       options="{'no_create': True, 'no_open': True}"
+                                       domain="[('active', '=', True)]"/>
+                                <div class="text-muted small">
+                                    Usuario para operaciones automáticas (validación desde webhook/tracking).
+                                    Por seguridad, crea un usuario dedicado con solo permisos de Inventario.
+                                </div>
                             </div>
                         </div>
                     </setting>
